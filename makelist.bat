@@ -11,6 +11,12 @@ REM set SOURCE=src\main.cpp
 set INCDIRS=include "%KINECTSDK10_DIR%inc"
 set SOURCE=src\nogui.cpp
 
+REM Copy the Kinect Runtime Redist into the BINDIR
+if exist "%KINECTSDK10_DIR%Redist" (
+  if not exist %BINDIR% mkdir %BINDIR%
+  copy /y "%KINECTSDK10_DIR%Redist" "%BINDIR%\"
+)
+
 set BINARY=kinetic.exe
 
 set CXX=cl /nologo /std:c++17 /D_CRT_SECURE_NO_WARNINGS /MT /EHsc
