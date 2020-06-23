@@ -76,6 +76,115 @@ int main()
 {
   std::set_terminate(&lak_terminate_handler);
 
+  /* --- Initialise Nui --- */
+
+  if (const auto result = NuiInitialize(NUI_INITIALIZE_FLAG_USES_DEPTH |
+                                        NUI_INITIALIZE_FLAG_USES_COLOR);
+      FAILED(result))
+  {
+    ERROR("Failed to initialise NUI (" + error_string(result) + ")");
+    return 1;
+  }
+
+  /* --- Open Nui streams --- */
+
+  HANDLE depth_stream;
+  HANDLE colour_stream;
+
+  auto try_open = [](HANDLE *stream,
+                     NUI_IMAGE_TYPE type,
+                     NUI_IMAGE_RESOLUTION res) -> HRESULT {
+    HRESULT result;
+    size_t max_tries = 10000;
+    do
+    {
+      result = NuiImageStreamOpen(type, res, NULL, 2, NULL, stream);
+      std::this_thread::yield();
+    } while (FAILED(result) && --max_tries);
+    return result;
+  };
+
+  if (const auto depth_open_result = try_open(
+        &depth_stream, NUI_IMAGE_TYPE_DEPTH, NUI_IMAGE_RESOLUTION_640x480);
+      FAILED(depth_open_result))
+  {
+    ERROR("Failed to open depth stream (" + error_string(depth_open_result) +
+          ")");
+    NuiShutdown();
+    return 1;
+  }
+
+  if (const auto colour_open_result = try_open(
+        &colour_stream, NUI_IMAGE_TYPE_COLOR, NUI_IMAGE_RESOLUTION_1280x960);
+      FAILED(colour_open_result))
+  {
+    ERROR("Failed to open colour stream (" + error_string(colour_open_result) +
+          ")");
+    NuiShutdown();
+    return 1;
+  }
+
+  auto read_frame =
+    [&](HANDLE stream, size_t element_size, auto callback) -> bool {
+    const NUI_IMAGE_FRAME *frame = nullptr;
+    const auto get_frame_result =
+      NuiImageStreamGetNextFrame(stream, 1000, &frame);
+
+    if (FAILED(get_frame_result))
+    {
+      ERROR("Failed to get next frame from colour stream (" +
+            error_string(get_frame_result) + ")");
+      return false;
+    }
+
+    if (frame != nullptr)
+    {
+      INuiFrameTexture *texture = frame->pFrameTexture;
+      NUI_LOCKED_RECT locked_rect;
+
+      texture->LockRect(0, &locked_rect, nullptr, 0);
+      if (locked_rect.Pitch != 0)
+      {
+        callback(lak::vec2i_t(locked_rect.Pitch / element_size,
+                              locked_rect.size / locked_rect.Pitch),
+                 locked_rect.pBits);
+      }
+      else
+      {
+        ERROR("Buffer length of received texture is bogus");
+        return false;
+      }
+      texture->UnlockRect(0);
+
+      NuiImageStreamReleaseFrame(stream, frame);
+    }
+    else
+    {
+      ERROR("No frame");
+      return false;
+    }
+
+    return true;
+  };
+
+  /* --- Test Nui streams --- */
+
+  if (!read_frame(
+        colour_stream, 4, [&](lak::vec2i_t size, const byte *frame) {}))
+  {
+    ERROR("Reading colour frame failed");
+    NuiShutdown();
+    return 1;
+  }
+
+  if (!read_frame(
+        depth_stream, 2, [&](lak::vec2i_t size, const byte *frame) {}))
+  {
+    ERROR("Reading depth frame failed");
+    NuiShutdown();
+    return 1;
+  }
+
   WSADATA wsaData;
   SOCKET connect_socket = INVALID_SOCKET;
 
@@ -156,33 +265,17 @@ int main()
     return 1;
   }
 
-  auto send_colour = [&connect_socket](lak::vec2i_t size,
-                                       const byte *buffer) -> bool {
-    std::vector<char> buf;
-    buf.resize(sizeof(size.x) + sizeof(size.y) + (size.x * size.y * 4));
-    memcpy(buf.data(), &size.x, sizeof(size.x));
-    memcpy(buf.data() + sizeof(size.x), &size.y, sizeof(size.y));
-    memcpy(buf.data() + sizeof(size.x) + sizeof(size.y),
-           buffer,
-           size.x * size.y * 4);
-    auto err = send(connect_socket, buf.data(), (int)buf.size(), 0);
-    if (err == SOCKET_ERROR)
-    {
-      ERROR("send failed (" << last_wsa_error() << ")");
-      return false;
-    }
-    return true;
-  };
-
-  auto send_depth = [&connect_socket](lak::vec2i_t size,
+  auto send_frame = [&connect_socket](lak::vec2i_t size,
+                                      size_t element_size,
                                       const byte *buffer) -> bool {
     std::vector<char> buf;
-    buf.resize(sizeof(size.x) + sizeof(size.y) + (size.x * size.y * 2));
+    buf.resize(sizeof(size.x) + sizeof(size.y) +
+               (size.x * size.y * element_size));
     memcpy(buf.data(), &size.x, sizeof(size.x));
     memcpy(buf.data() + sizeof(size.x), &size.y, sizeof(size.y));
     memcpy(buf.data() + sizeof(size.x) + sizeof(size.y),
            buffer,
-           size.x * size.y * 2);
+           size.x * size.y * element_size);
     auto err = send(connect_socket, buf.data(), (int)buf.size(), 0);
     if (err == SOCKET_ERROR)
     {
@@ -191,139 +284,35 @@ int main()
     }
     return true;
   };
-
-  // Set this to false if anything hits a fatal error.
-  bool running = true;
-
-  if (const auto result = NuiInitialize(NUI_INITIALIZE_FLAG_USES_DEPTH |
-                                        NUI_INITIALIZE_FLAG_USES_COLOR);
-      FAILED(result))
-  {
-    ERROR("Failed to initialise NUI (" + error_string(result) + ")");
-    return 1;
-  }
-
-  HANDLE depth_stream;
-  HANDLE colour_stream;
-
-  auto try_open = [](HANDLE *stream,
-                     NUI_IMAGE_TYPE type,
-                     NUI_IMAGE_RESOLUTION res) -> HRESULT {
-    HRESULT result;
-    size_t max_tries = 10000;
-    do
-    {
-      result = NuiImageStreamOpen(type, res, NULL, 2, NULL, stream);
-      std::this_thread::yield();
-    } while (FAILED(result) && --max_tries);
-    return result;
-  };
-
-  if (const auto depth_open_result = try_open(
-        &depth_stream, NUI_IMAGE_TYPE_DEPTH, NUI_IMAGE_RESOLUTION_640x480);
-      FAILED(depth_open_result))
-  {
-    ERROR("Failed to open depth stream (" + error_string(depth_open_result) +
-          ")");
-    running = false;
-  }
-
-  if (const auto colour_open_result = try_open(
-        &colour_stream, NUI_IMAGE_TYPE_COLOR, NUI_IMAGE_RESOLUTION_1280x960);
-      FAILED(colour_open_result))
-  {
-    ERROR("Failed to open colour stream (" + error_string(colour_open_result) +
-          ")");
-    running = false;
-  }
 
   CHECKPOINT();
 
-  bool depth_mode = true;
-
-  while (running)
+  for (bool running = true; running;)
   {
-    bool dump_files = false;
-
+    if (!read_frame(
+          colour_stream, 4, [&](lak::vec2i_t size, const byte *frame) {
+            if (!send_frame(size, 4, frame))
+            {
+              ERROR("Aborting");
+              running = false;
+            }
+          }))
     {
-      const NUI_IMAGE_FRAME *colour_frame = nullptr;
-      const auto get_frame_result =
-        NuiImageStreamGetNextFrame(colour_stream, 1000, &colour_frame);
-
-      if (FAILED(get_frame_result))
-      {
-        ERROR("Failed to get next frame from colour stream (" +
-              error_string(get_frame_result) + ")");
-        running = false;
-      }
-
-      if (colour_frame != nullptr)
-      {
-        INuiFrameTexture *colour_texture = colour_frame->pFrameTexture;
-        NUI_LOCKED_RECT locked_rect;
-
-        colour_texture->LockRect(0, &locked_rect, nullptr, 0);
-        if (locked_rect.Pitch != 0)
-        {
-          send_colour(
-            lak::vec2i_t(locked_rect.Pitch / (sizeof(unsigned char) * 4),
-                         locked_rect.size / locked_rect.Pitch),
-            locked_rect.pBits);
-        }
-        else
-        {
-          std::cout << "Buffer length of receiver texture is bogus\n";
-          send_colour({0, 0}, nullptr);
-        }
-        colour_texture->UnlockRect(0);
-
-        NuiImageStreamReleaseFrame(colour_stream, colour_frame);
-      }
-      else
-      {
-        ERROR("No frame");
-        running = false;
-      }
+      ERROR("Reading colour frame failed");
+      break;
     }
 
+    if (!read_frame(
+          depth_stream, 2, [&](lak::vec2i_t size, const byte *frame) {
+            if (!send_frame(size, 2, frame))
+            {
+              ERROR("Aborting");
+              running = false;
+            }
+          }))
     {
-      const NUI_IMAGE_FRAME *depth_frame = nullptr;
-      const auto get_frame_result =
-        NuiImageStreamGetNextFrame(depth_stream, 1000, &depth_frame);
-
-      if (FAILED(get_frame_result))
-      {
-        ERROR("Failed to get next frame from depth stream (" +
-              error_string(get_frame_result) + ")");
-        running = false;
-      }
-
-      if (depth_frame != nullptr)
-      {
-        INuiFrameTexture *depth_texture = depth_frame->pFrameTexture;
-        NUI_LOCKED_RECT locked_rect;
-
-        depth_texture->LockRect(0, &locked_rect, nullptr, 0);
-        if (locked_rect.Pitch != 0)
-        {
-          send_depth(lak::vec2i_t(locked_rect.Pitch / sizeof(unsigned short),
-                                  locked_rect.size / locked_rect.Pitch),
-                     locked_rect.pBits);
-        }
-        else
-        {
-          std::cout << "Buffer length of receiver texture is bogus\n";
-          send_depth({0, 0}, nullptr);
-        }
-        depth_texture->UnlockRect(0);
-
-        NuiImageStreamReleaseFrame(depth_stream, depth_frame);
-      }
-      else
-      {
-        ERROR("No frame");
-        running = false;
-      }
+      ERROR("Reading depth frame failed");
+      break;
     }
   }
 
