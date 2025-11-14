@@ -1,6 +1,0 @@
-[submodule "include/strconv"]
-	path = include/strconv
-	url = https://github.com/LAK132/strconv
-[submodule "include/lak/defer"]
-	path = include/lak/defer
-	url = https://github.com/LAK132/defer
