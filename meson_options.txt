@@ -147,6 +147,14 @@ option('libraw_use_x3ftools',
 	yield: true,
 )
 
+# openvr options
+
+option('lak_enable_openvr',
+	type: 'boolean',
+	value: true,
+	yield: true,
+)
+
 # stb options
 
 option('lak_enable_stb',

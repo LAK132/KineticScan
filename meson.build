@@ -63,7 +63,6 @@ executable(
 	],
 	dependencies: [
 		lak_dep,
-		openvr_dep,
 		kinect_sdk_dep,
 	],
 )

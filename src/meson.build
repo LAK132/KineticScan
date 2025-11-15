@@ -6,7 +6,6 @@ openvr_wrapper = static_library(
 	override_options: lak_subprj.get_variable('override_options_w3'),
 	dependencies: [
 		lak_dep,
-		openvr_dep,
 	],
 )
 

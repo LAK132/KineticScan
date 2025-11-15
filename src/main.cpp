@@ -194,8 +194,8 @@ void update_poses()
 	{
 		if (tracked_device_poses[nDevice].bPoseIsValid)
 		{
-			device_poses[nDevice] = to_z_up(
-			  hmd_to_glm(tracked_device_poses[nDevice].mDeviceToAbsoluteTracking));
+			device_poses[nDevice] = to_z_up(lak::openvr::to_glm(
+			  tracked_device_poses[nDevice].mDeviceToAbsoluteTracking));
 			if (device_classes[nDevice] == vr::TrackedDeviceClass_Invalid)
 				device_classes[nDevice] =
 				  vr::VRSystem()->GetTrackedDeviceClass(nDevice);
@@ -221,7 +221,7 @@ lak::optional<int> LAK_BASIC_SINGLE_WINDOW_PROGRAM(program_init)()
 	  ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoSavedSettings |
 	  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove;
 
-	init_openvr();
+	lak::openvr::init(vr::VRApplication_Other).UNWRAP();
 
 	if (false)
 	{
